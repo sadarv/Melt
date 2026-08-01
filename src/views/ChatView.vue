@@ -1,0 +1,1794 @@
+<template>
+    <div class="chat-page" :class="['theme-' + chatTheme, { 'bubble-merge': bubbleMerge }]">
+
+        <!-- Header -->
+        <div class="chat-header">
+            <button class="back-btn" @click="goBack">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                    <path d="M19 12H5M12 19l-7-7 7-7" />
+                </svg>
+            </button>
+            <div class="header-info" @click="goToDetail">
+                <div class="header-avatar">
+                    <img v-if="personaAvatarUrl" :src="personaAvatarUrl" />
+                    <span v-else>{{ personaAvatar }}</span>
+                </div>
+                <div class="header-text">
+                    <span class="header-name">{{ personaName }}</span>
+                    <span class="header-status" :class="{ 'status-busy': isBusyStatus }">
+                        <span class="status-dot" :class="{ 'dot-busy': isBusyStatus }"></span>
+                        {{ isBusyStatus ? (personaStatus.reason || '忙碌中') : '在线' }}
+                    </span>
+                </div>
+            </div>
+            <div class="header-actions">
+                <button v-if="selectMode" class="header-btn danger" @click="cancelSelect">取消</button>
+                <button class="header-btn" @click="showPanel = !showPanel">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                        <circle cx="12" cy="5" r="1" />
+                        <circle cx="12" cy="12" r="1" />
+                        <circle cx="12" cy="19" r="1" />
+                    </svg>
+                </button>
+            </div>
+        </div>
+
+        <!-- 浮动面板 -->
+        <transition name="panel">
+            <div v-if="showPanel" class="float-panel" @click.self="showPanel = false">
+                <div class="panel-content">
+                    <div class="panel-item" @click="goToDetail">
+                        <span class="panel-icon">✧</span>
+                        <div>
+                            <p class="panel-title">助手详情</p>
+                            <p class="panel-sub">进入人格空间</p>
+                        </div>
+                    </div>
+                    <div class="panel-item" @click="clearChat">
+                        <span class="panel-icon">◌</span>
+                        <div>
+                            <p class="panel-title">清理痕迹</p>
+                            <p class="panel-sub">清空对话</p>
+                        </div>
+                    </div>
+                    <div class="panel-item" @click="$router.push('/worldbook')">
+                        <span class="panel-icon">❋</span>
+                        <div>
+                            <p class="panel-title">世界书</p>
+                            <p class="panel-sub">这个世界的设定</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </transition>
+
+        <!-- 多选操作栏 -->
+        <transition name="slide-down">
+            <div v-if="selectMode && selectedIds.length > 0" class="select-bar">
+                <span class="select-count">已选 {{ selectedIds.length }} 条</span>
+                <div class="select-actions">
+                    <button @click="deleteSelected">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round">
+                            <polyline points="3 6 5 6 21 6" />
+                            <path d="M19 6l-1 14H6L5 6" />
+                        </svg>
+                        删除
+                    </button>
+                    <button @click="bookmarkSelected">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round">
+                            <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+                        </svg>
+                        收藏
+                    </button>
+                    <button @click="screenshotSelected">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round">
+                            <rect x="3" y="3" width="18" height="18" rx="2" />
+                            <circle cx="8.5" cy="8.5" r="1.5" />
+                            <path d="M21 15l-5-5L5 21" />
+                        </svg>
+                        截图
+                    </button>
+                </div>
+            </div>
+        </transition>
+
+        <!-- 消息列表 -->
+        <div class="chat-messages" ref="messagesContainer" @scroll="handleScroll">
+            <div v-if="chatStore.hasMore" class="load-more" @click="loadOlder">
+                加载更早的消息
+            </div>
+
+            <template v-for="(item, idx) in messagesWithTimestamp" :key="item.id || idx">
+                <div v-if="item.showTime" class="time-divider">
+                    <span>{{ item.timeLabel }}</span>
+                </div>
+                <ChatBubble :msg="item" :theme="chatTheme" :merge="bubbleMerge" :is-merged="item.isMerged"
+                    :show-avatar="shouldShowAvatar(item, idx)" :persona-avatar="personaAvatar"
+                    :persona-avatar-url="personaAvatarUrl" :user-avatar="userAvatar" :select-mode="selectMode"
+                    :selected="selectedIds.includes(item.id)" @edit="handleEdit" @delete="handleDelete"
+                    @regenerate="handleRegenerate" @bookmark="handleBookmark" @select="toggleSelect"
+                    @quote="handleQuote" />
+            </template>
+
+            <TypingIndicator :visible="isTyping" />
+        </div>
+
+        <DebugPanel v-if="showDebug" :info="debugInfo" />
+
+        <ChatInput @send="handleSend" @send-images="handleSendImages" @send-emoji="handleSendEmoji"
+            @send-gift="handleSendGift" @send-transfer="handleSendTransfer" @send-location="handleSendLocation"
+            @continue-reply="handleContinueReply" @regenerate="handleRegenerateLatest" @multiselect="enterSelectMode"
+            @send-card="handleSendCard" @send-delivery="handleSendDelivery" :quote-msg="quotingMsg"
+            @clear-quote="quotingMsg = null" />
+    </div>
+</template>
+
+<script setup>
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import ChatBubble from '@/components/chat/ChatBubble.vue'
+import ChatInput from '@/components/chat/ChatInput.vue'
+import TypingIndicator from '@/components/chat/TypingIndicator.vue'
+import DebugPanel from '@/components/chat/DebugPanel.vue'
+import { useChatStore } from '@/stores/chat'
+import { useWebSocket } from '@/composables/useWebSocket'
+import { api, isLocalMode } from '@/utils/api'
+import { setCache } from '@/utils/cache'
+import { emergencyMode, isEffectivelyOffline } from '@/utils/emergencyMode';
+import { generateEmergencyReply } from '@/utils/localApi';   // localApi.js 中新增的函数
+import { storage } from '@/utils/storage'
+import { pulseOnUserMessage } from '@/utils/proactiveMessage.js'
+import { updateEmotionOnMessage } from '@/utils/contextCache.js'
+
+const route = useRoute()
+const router = useRouter()
+const chatStore = useChatStore()
+const { send, onMessage, removeHandler, clearHandlers } = useWebSocket()
+
+const messagesContainer = ref(null)
+const isTyping = ref(false)
+const debugInfo = ref(null)
+const showPanel = ref(false)
+const showDebug = ref(false)
+const maxBubbles = ref(3)
+const personaAvatar = ref('💬')
+const personaAvatarUrl = ref('')
+const personaName = ref('AI 助手')
+const chatTheme = ref('default')
+const bubbleMerge = ref(false)
+const userAvatar = ref(localStorage.getItem('home_user_avatar') || '')
+const lastHandledContent = ref('')
+const lastHandledTime = ref(0)
+const personaStatus = ref({ status: 'available', reason: '' })
+const quotingMsg = ref(null)
+
+const isBusyStatus = computed(() => personaStatus.value.status !== 'available')
+const selectMode = ref(false)
+const selectedIds = ref([])
+const personaId = computed(() => route.params.personaId)
+
+const messagesWithTimestamp = computed(() => {
+    const msgs = chatStore.messages
+    const result = []
+    let lastTime = null
+    msgs.forEach((msg, idx) => {
+        const ts = msg.timestamp ? new Date(msg.timestamp) : null
+        let showTime = false
+        let timeLabel = ''
+        if (ts) {
+            if (!lastTime || (ts - lastTime) > 5 * 60 * 1000) {
+                showTime = true
+                timeLabel = formatTimeLabel(ts)
+                lastTime = ts
+            }
+        }
+        const isMerged = bubbleMerge.value && idx > 0
+            && msgs[idx - 1].role === msg.role
+            && !showTime
+            && !msg.type
+        result.push({ ...msg, showTime, timeLabel, isMerged })
+    })
+    return result
+})
+
+function formatTimeLabel(date) {
+    const now = new Date()
+    const days = Math.floor((now - date) / 86400000)
+    if (days === 0) return `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`
+    if (days === 1) return `昨天 ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`
+    return `${date.getMonth() + 1}/${date.getDate()} ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`
+}
+
+function shouldShowAvatar(item, idx) {
+    if (chatTheme.value === 'default' || chatTheme.value === 'minimal' || chatTheme.value === 'liquid') return false
+    const msgs = messagesWithTimestamp.value
+    const next = msgs[idx + 1]
+    if (!next || next.role !== item.role) return true
+    return false
+}
+
+async function loadPersonaName() {
+    try {
+        const res = await api(`/api/persona/${personaId.value}`)
+        const data = await res.json()
+        personaName.value = data.note || data.name || 'AI 助手'
+        personaAvatar.value = data.avatar || '💬'
+        personaAvatarUrl.value = data.avatarUrl || ''
+        showDebug.value = data.show_debug || false
+        chatTheme.value = data.chat_theme || data.chatTheme || 'default'
+        bubbleMerge.value = data.bubble_merge || false
+        if (data.max_messages || data.maxMessages) maxBubbles.value = data.max_messages || data.maxMessages
+        bubbleMerge.value = data.bubble_merge || data.bubbleMerge || false
+        if (data.chat_wallpaper || data.chatWallpaper) {
+            const wallpaper = data.chat_wallpaper || data.chatWallpaper
+            const chatPage = document.querySelector('.chat-page')
+            if (chatPage) {
+                chatPage.style.backgroundImage = `url(${wallpaper})`
+                chatPage.style.backgroundSize = 'cover'
+                chatPage.style.backgroundPosition = 'center'
+            }
+        }
+        if (data.chat_theme && data.chat_theme.startsWith('custom_')) {
+            const saved = localStorage.getItem(`chat_custom_themes_${personaId.value}`)
+            if (saved) {
+                const themes = JSON.parse(saved)
+                const found = themes.find(t => t.id === data.chat_theme)
+                if (found) {
+                    const old = document.getElementById('custom-chat-theme')
+                    if (old) old.remove()
+                    const style = document.createElement('style')
+                    style.id = 'custom-chat-theme'
+                    style.textContent = found.css
+                    document.head.appendChild(style)
+                }
+            }
+        }
+    } catch { }
+    try {
+        const sRes = await api(`/api/persona-status/${personaId.value}`)
+        personaStatus.value = await sRes.json()
+    } catch { }
+}
+
+function scrollToBottom() {
+    nextTick(() => {
+        if (messagesContainer.value) messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
+    })
+}
+
+function handleQuote(quoteData) {
+    quotingMsg.value = quoteData
+}
+
+async function handleSend(text, opts = {}) {
+    if (!text || !personaId.value) return
+
+    const isEmergency = emergencyMode.value
+    const msgTimestamp = new Date().toISOString()
+    const msgId = `user_${Date.now()}`
+
+    // local 模式：手动存 IndexedDB，addMessage 传 null 避免重复写
+    if (isLocalMode) {
+        await storage.appendMessage(personaId.value, {
+            id: msgId,
+            role: 'user',
+            content: text,
+            timestamp: msgTimestamp,
+            msg_type: 'text',
+        })
+    }
+
+    // 只加内存，不再重复持久化
+    await chatStore.addMessage({
+        id: msgId,
+        role: 'user',
+        content: text,
+        timestamp: msgTimestamp,
+        source: isEmergency ? 'emergency' : undefined
+    }, null)
+
+    scrollToBottom()
+    if (personaId.value === 'wechat_sync') return
+
+    // ✅ 应急模式
+    if (isEmergency) {
+        isTyping.value = true
+        const history = chatStore.allMessages.map(m => ({
+            role: m.role, content: m.content
+        }))
+        // 修正参数顺序
+        const reply = await generateEmergencyReply(personaId.value, text, history)
+
+        // 先按 ||| 分割，再对每段按双换行或单换行分割
+        let rawBubbles = []
+        const byPipe = reply.split('|||').map(s => s.trim()).filter(Boolean)
+        for (const seg of byPipe) {
+            // 段内如果有换行，也拆成多个气泡
+            const lines = seg.split(/\n+/).map(s => s.trim()).filter(Boolean)
+            rawBubbles.push(...lines)
+        }
+        const bubbles = rawBubbles
+
+        if (bubbles.length === 0) bubbles.push(reply)
+        for (let i = 0; i < bubbles.length; i++) {
+            await new Promise(r => setTimeout(r, 400))
+            await chatStore.addMessage({
+                role: 'ai',
+                content: bubbles[i],
+                timestamp: new Date().toISOString(),
+                source: 'emergency'
+            }, personaId.value)
+            scrollToBottom()
+        }
+        isTyping.value = false
+        return
+    }
+
+    // ✅ 本地模式：走 api()，localApiHandler 会调用 AI 并返回回复
+    if (isLocalMode) {
+        // 🚀 检查 autoReply 开关
+        const prefs = JSON.parse(localStorage.getItem('output_prefs') || '{}')
+        if (prefs.autoReply === false) return
+
+        isTyping.value = true
+        try {
+            const res = await api(`/api/messages/${personaId.value}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content: text })
+            })
+            const data = await res.json()
+            let reply = data.reply || ''
+
+            // 内部错误码 → 人设化提示
+            if (!reply || reply === '[empty_reply]') {
+                reply = '[刚才走神了一下，没反应过来，再说一遍？]'
+            } else if (reply === '[context_length_exceeded]') {
+                reply = '[说了太多话脑子有点转不过来了，要不要清一下聊天记录再聊？]'
+            } else if (reply.startsWith('[network_error]')) {
+                reply = `[网络出了点问题，${reply.replace('[network_error] ', '')}]`
+            } else if (reply.startsWith('[系统故障')) {
+                // 保留原始错误信息方便排查，但加上人设化前缀
+                reply = `${reply}（API 报错，可截图排查）`
+            }
+
+            const bubbles = reply.split('|||').map(s => s.replace(/\n/g, ' ').trim()).filter(Boolean)
+            if (bubbles.length === 0) {
+                isTyping.value = false
+                return
+            }
+
+            // 🚀 持久化：只写一次完整 AI 回复到 localStorage
+
+            await storage.appendMessage(personaId.value, {
+                id: Date.now(),
+                role: 'ai',
+                content: reply,
+                timestamp: new Date().toISOString(),
+                msg_type: 'text',
+            })
+
+            // 展示：按气泡逐条显示（只加内存，不再写 localStorage）
+            for (let i = 0; i < bubbles.length; i++) {
+                if (i > 0) await new Promise(r => setTimeout(r, 600))
+                await chatStore.addMessage({
+                    role: 'ai',
+                    content: bubbles[i],
+                    timestamp: new Date().toISOString()
+                }, null) // null = 不写 localStorage，已经在上面写过了
+                scrollToBottom()
+            }
+
+            chatStore.triggerMemoryProcessing(personaId.value, text, reply)
+        } catch (e) {
+            console.error('[Chat] 本地模式发送失败:', e)
+            await chatStore.addMessage({
+                role: 'ai',
+                content: '发送失败，请检查 API 配置',
+                timestamp: new Date().toISOString()
+            }, null)
+        } finally {
+            isTyping.value = false
+        }
+
+        // 🚀 记录最近聊天的角色
+        localStorage.setItem('last_chat_persona', personaId.value)
+
+        return
+    }
+
+    // personal 模式：走 WebSocket
+    if (opts.autoReply !== false) {
+        // 🚀 检查 autoReply 开关
+        const prefs = JSON.parse(localStorage.getItem('output_prefs') || '{}')
+        if (prefs.autoReply === false) return
+
+        send({ type: 'chat', content: text, personaId: personaId.value })
+        isTyping.value = true
+    }
+
+}
+
+// 🚀 local 模式专用：发送描述文字给 AI 并展示回复
+async function localSendAndReply(desc) {
+    isTyping.value = true
+    let replyForMemory = ''
+    try {
+        const res = await api(`/api/messages/${personaId.value}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: desc })
+        })
+        const data = await res.json()
+        let reply = data.reply || ''
+        if (!reply || reply === '[empty_reply]') {
+            reply = '[刚才没注意到，再说一遍？]'
+        } else if (reply === '[context_length_exceeded]') {
+            reply = '[话太多了记不住，要不要清一下记录？]'
+        }
+
+        replyForMemory = reply
+
+        // 先按 ||| 分割，再对每段按双换行或单换行分割
+        let rawBubbles = []
+        const byPipe = reply.split('|||').map(s => s.trim()).filter(Boolean)
+        for (const seg of byPipe) {
+            // 段内如果有换行，也拆成多个气泡
+            const lines = seg.split(/\n+/).map(s => s.trim()).filter(Boolean)
+            rawBubbles.push(...lines)
+        }
+        const bubbles = rawBubbles
+
+        if (bubbles.length === 0) bubbles.push(reply)
+
+        await storage.appendMessage(personaId.value, {
+            id: Date.now(),
+            role: 'ai',
+            content: reply,
+            timestamp: new Date().toISOString(),
+            msg_type: 'text',
+        })
+
+        for (let i = 0; i < bubbles.length; i++) {
+            if (i > 0) await new Promise(r => setTimeout(r, 600))
+            await chatStore.addMessage({
+                role: 'ai',
+                content: bubbles[i],
+                timestamp: new Date().toISOString()
+            }, null)
+            scrollToBottom()
+        }
+
+        chatStore.triggerMemoryProcessing(personaId.value, desc, reply)
+        pulseOnUserMessage(personaId.value, desc)
+        updateEmotionOnMessage(personaId.value, desc)
+
+    } catch (e) {
+        console.error('[Chat] local 特殊消息回复失败:', e)
+    } finally {
+        isTyping.value = false
+    }
+
+    localStorage.setItem('last_chat_persona', personaId.value)
+}
+
+async function handleSendImages({ images, text }) {
+    await chatStore.addMessage({ role: 'user', type: 'images', images, content: text, timestamp: new Date().toISOString() }, personaId.value)
+    const desc = text ? `[图片] ${text}` : `[图片]`
+    if (isLocalMode) {
+        await localSendAndReply(desc)
+    } else {
+        send({ type: 'chat', content: desc, personaId: personaId.value, images })
+        isTyping.value = true
+    }
+    scrollToBottom()
+}
+
+function handleSendEmoji(emoji) {
+    chatStore.addMessage({ role: 'user', type: 'emoji', emojiUrl: emoji.url, emojiName: emoji.name, content: `[表情包: ${emoji.name || ''}]`, timestamp: new Date().toISOString() }, personaId.value)
+    const desc = `[用户发了一个表情包: ${emoji.name || ''}]`
+    if (isLocalMode) {
+        localSendAndReply(desc)
+    } else {
+        send({ type: 'chat', content: desc, personaId: personaId.value })
+        isTyping.value = true
+    }
+    scrollToBottom()
+}
+
+async function handleSendGift({ name, content, message, method, methodDesc }) {
+    chatStore.addMessage({ role: 'user', type: 'gift', giftName: name, giftContent: content, giftMessage: message, giftMethod: method, content: `[礼物: ${name}]`, timestamp: new Date().toISOString() }, personaId.value)
+    try { await api(`/api/gifts/${personaId.value}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ direction: 'user_to_ai', giftName: name, giftContent: content || '', giftMessage: message || '' }) }) } catch { }
+    let desc = `[用户${methodDesc}一份礼物: ${name}`
+    if (content) desc += `，里面有：${content}`
+    if (message) desc += `，附言：${message}`
+    desc += `]`
+    if (isLocalMode) {
+        await localSendAndReply(desc)
+    } else {
+        send({ type: 'chat', content: desc, personaId: personaId.value })
+        isTyping.value = true
+    }
+
+    scrollToBottom()
+}
+
+function handleSendCard({ html }) {
+    chatStore.addMessage({ role: 'user', type: 'card', cardHtml: html, content: '[HTML卡片]', timestamp: new Date().toISOString() }, personaId.value)
+    const desc = '[用户发送了一张 HTML 小卡片]'
+    if (isLocalMode) {
+        localSendAndReply(desc)
+    } else {
+        send({ type: 'chat', content: desc, personaId: personaId.value })
+        isTyping.value = true
+    }
+    scrollToBottom()
+}
+
+async function handleSendDelivery({ type, content, address, fromAddress, note, amount, expectedAt }) {
+    chatStore.addMessage({
+        role: 'user', type: type === 'food' ? 'food' : 'express',
+        deliveryContent: content, deliveryAddress: address, deliveryNote: note,
+        deliveryExpectedAt: expectedAt, deliveryAmount: amount,
+        content: type === 'food' ? `[外卖: ${content}]` : `[快递: ${content}]`,
+        timestamp: new Date().toISOString()
+    }, personaId.value)
+
+    try { await api('/api/delivery', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ personaId: personaId.value, direction: 'user_to_ai', sender: 'user', type, content, address, fromAddress, note, amount, expectedAt }) }) } catch { }
+
+    let desc = type === 'food'
+        ? `[用户点了外卖：${content}${address ? `，送到${address}` : ''}${note ? `，备注：${note}` : ''}${amount ? `，费用¥${amount}` : ''}${expectedAt ? `，预计${new Date(expectedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}到` : ''}]`
+        : `[用户寄了快递：${content}${fromAddress ? `，从${fromAddress}发出` : ''}${address ? `，寄往${address}` : ''}${note ? `，备注：${note}` : ''}${amount ? `，费用¥${amount}` : ''}${expectedAt ? `，预计${new Date(expectedAt).toLocaleDateString('zh-CN')}到达` : ''}]`
+
+    if (isLocalMode) {
+        await localSendAndReply(desc)
+    } else {
+        send({ type: 'chat', content: desc, personaId: personaId.value })
+        isTyping.value = true
+    }
+
+    // 🚀 有金额时计入钱包
+    if (amount && amount > 0) {
+        try {
+            await api('/api/wallet/user', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    direction: 'user_to_ai',
+                    amount,
+                    note: content,
+                    category: type === 'food' ? 'food' : 'express',
+                    from_name: '我',
+                    to_name: personaName.value
+                })
+            })
+        } catch { }
+    }
+    scrollToBottom()
+}
+
+async function handleSendTransfer({ amount, note }) {
+    chatStore.addMessage({ role: 'user', type: 'transfer', amount, note, content: `[转账: ¥${amount.toFixed(2)}]`, timestamp: new Date().toISOString() }, personaId.value)
+    try { await api(`/api/transfers/${personaId.value}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ direction: 'user_to_ai', amount: parseFloat(amount), note: note || '' }) }) } catch { }
+    const desc = `[用户转账了 ¥${amount.toFixed(2)}${note ? `，备注：${note}` : ''}]`
+    if (isLocalMode) {
+        await localSendAndReply(desc)
+    } else {
+        send({ type: 'chat', content: desc, personaId: personaId.value })
+        isTyping.value = true
+    }
+    // 🚀 计入用户钱包（转出）
+    try {
+        await api('/api/wallet/user', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                direction: 'user_to_ai',
+                amount: parseFloat(amount),
+                note: note || '',
+                category: 'transfer',
+                from_name: '我',
+                to_name: personaName.value
+            })
+        })
+    } catch { }
+    scrollToBottom()
+}
+
+function handleSendLocation({ lat, lng, manual }) {
+    chatStore.addMessage({ role: 'user', type: 'location', lat, lng, locationName: manual ? '我的位置' : '当前位置', content: `[位置]`, timestamp: new Date().toISOString() }, personaId.value)
+    const desc = lat ? `[用户分享了位置: ${lat.toFixed(4)}, ${lng.toFixed(4)}]` : `[用户分享了当前位置]`
+    if (isLocalMode) {
+        localSendAndReply(desc)
+    } else {
+        send({ type: 'chat', content: desc, personaId: personaId.value })
+        isTyping.value = true
+    }
+    scrollToBottom()
+}
+
+function handleContinueReply() {
+    if (isLocalMode) {
+        localSendAndReply('[继续]')
+    } else {
+        send({ type: 'chat', content: '[继续]', personaId: personaId.value })
+        isTyping.value = true
+    }
+    scrollToBottom()
+}
+
+async function handleRegenerateLatest() {
+    const lastAi = [...chatStore.messages].reverse().find(m => m.role === 'ai')
+    if (!lastAi) return
+    chatStore.messages = chatStore.messages.filter(m => m.id !== lastAi.id)
+    await api(`/api/message/${lastAi.id}`, { method: 'DELETE' })
+    const lastUser = [...chatStore.messages].reverse().find(m => m.role === 'user')
+    if (lastUser) {
+        if (isLocalMode) {
+            await localSendAndReply(lastUser.content)
+        } else {
+            send({ type: 'chat', content: lastUser.content, personaId: personaId.value })
+            isTyping.value = true
+        }
+    }
+}
+
+async function handleIncoming(data) {
+    if (data.type === 'bus_message') return;
+
+    if (data.type === 'chat' || data.type === 'push') {
+        const key = (data.content || '') + (data.timestamp || '');
+        const now = Date.now();
+        if (key === lastHandledContent.value && now - lastHandledTime.value < 5000) return;
+        lastHandledContent.value = key;
+        lastHandledTime.value = now;
+
+        isTyping.value = false;
+
+        api(`/api/persona-status/${personaId.value}`).then(r => r.json()).then(s => { personaStatus.value = s }).catch(() => { });
+
+        let cleanContent = data.content.replace(/\[思考\][\s\S]*?\[思考\]/g, '').replace(/[\s\S]*?<\/think>/g, '').trim();
+        const bubbles = cleanContent.split('|||').map(s => s.replace(/\n/g, ' ').trim()).filter(Boolean);
+        let final = bubbles;
+        const limit = maxBubbles.value || 3;
+
+        if (bubbles.length > limit) {
+            final = [];
+            const chunkSize = Math.ceil(bubbles.length / limit);
+            for (let i = 0; i < bubbles.length; i += chunkSize) {
+                final.push(bubbles.slice(i, i + chunkSize).join(' '));
+            }
+        }
+
+        if (final.length === 0 && !data.specialPayload && !data.toolCalls) {
+            isTyping.value = false;
+            return;
+        }
+
+        // ======================= 核心修改区域开始 =======================
+
+        // 步骤 1: 在 AI 回复前，先找到对应的用户消息。
+        // 我们从 store 中获取，以确保数据是最新的。
+        const lastUserMessage = [...chatStore.messages].reverse().find(m => m.role === 'user');
+
+        // ===============================================================
+
+        // 步骤 2: 正常处理文本气泡的显示 (你的原有逻辑)
+        if (final.length > 0) {
+            for (let idx = 0; idx < final.length; idx++) {
+                const line = final[idx];
+                if (idx > 0) {
+                    await new Promise(resolve => setTimeout(resolve, 600));
+                }
+                if (idx === final.length - 1) isTyping.value = false;
+
+                await chatStore.addMessage({
+                    role: 'ai',
+                    content: line,
+                    timestamp: new Date(new Date(data.timestamp).getTime() + idx * 100).toISOString()
+                });
+                scrollToBottom();
+
+                if (idx === final.length - 1 && chatStore.allMessages) {
+                    setCache(`messages_${personaId.value}`, chatStore.allMessages);
+                }
+            }
+        }
+
+        // ======================= 核心修改区域再次出现 =======================
+
+        // 步骤 3: 在所有气泡都显示完毕后，触发记忆处理。
+        // 我们需要确保 lastUserMessage 存在，并且 AI 确实回复了文本内容。
+        if (lastUserMessage && final.length > 0) {
+            const fullAiReplyContent = final.join(' ');
+
+            // 重要：调用 store 中的 action (我们稍后会在 chat.js 中创建这个 action)
+            // 即使现在 chat.js 里还没有这个函数，先写上也没关系，这是我们的目标。
+            if (typeof chatStore.triggerMemoryProcessing === 'function') {
+                chatStore.triggerMemoryProcessing(
+                    personaId.value,
+                    lastUserMessage.content,
+                    fullAiReplyContent
+                )
+                console.log('[ChatView] Memory processing triggered.');
+            } else {
+                console.warn('[ChatView] chatStore.triggerMemoryProcessing is not a function yet. Please implement it in chat.js.');
+            }
+        }
+
+        // =================================================================
+
+        // 步骤 4: 继续处理你的其他逻辑 (specialPayload, toolCalls)，这些完全不受影响。
+        if (data.specialPayload) {
+            const sp = data.specialPayload;
+            await new Promise(resolve => setTimeout(resolve, 800));
+
+            if (sp.type === 'gift') {
+                await chatStore.addMessage({ role: 'ai', type: 'gift', giftName: sp.data.name, giftContent: sp.data.content, giftMessage: sp.data.message, content: `[礼物: ${sp.data.name}]`, timestamp: data.timestamp });
+            } else if (sp.type === 'transfer') {
+                await chatStore.addMessage({ role: 'ai', type: 'transfer', amount: sp.data.amount, note: sp.data.note, content: `[转账: ¥${sp.data.amount}]`, timestamp: data.timestamp });
+            } else if (sp.type === 'location') {
+                await chatStore.addMessage({ role: 'ai', type: 'location', lat: null, lng: null, locationName: sp.data.name, content: `[位置: ${sp.data.name}]`, timestamp: data.timestamp });
+            } else if (sp.type === 'card') {
+                await chatStore.addMessage({ role: 'ai', type: 'card', cardHtml: sp.data.html, content: '[HTML卡片]', timestamp: data.timestamp });
+            } else if (sp.type === 'food') {
+                await chatStore.addMessage({ role: 'ai', type: 'food', deliveryContent: sp.data.content, deliveryAddress: sp.data.address, deliveryNote: sp.data.note, deliveryExpectedAt: sp.data.expectedMinutes ? new Date(Date.now() + sp.data.expectedMinutes * 60000).toISOString() : null, content: `[外卖: ${sp.data.content}]`, timestamp: data.timestamp });
+                if (chatStore.allMessages) setCache(`messages_${personaId.value}`, chatStore.allMessages);
+            } else if (sp.type === 'express') {
+                await chatStore.addMessage({ role: 'ai', type: 'express', deliveryContent: sp.data.content, deliveryNote: sp.data.note, deliveryExpectedAt: sp.data.expectedDays ? new Date(Date.now() + sp.data.expectedDays * 86400000).toISOString() : null, content: `[快递: ${sp.data.content}]`, timestamp: data.timestamp });
+                if (chatStore.allMessages) setCache(`messages_${personaId.value}`, chatStore.allMessages);
+            }
+            scrollToBottom();
+        }
+
+        if (personaId.value === 'agent' && data.toolCalls) {
+            for (const call of data.toolCalls) {
+                if (call.type === 'github_read') {
+                    try {
+                        const res = await api(`/api/github/file?path=${encodeURIComponent(call.path)}&branch=${call.branch || 'main'}`);
+                        const fileData = await res.json();
+                        await chatStore.addMessage({
+                            role: 'system',
+                            content: `[文件内容]\n路径: ${call.path}\n\n${fileData.content.slice(0, 2000)}${fileData.content.length > 2000 ? '\n...(内容过长已截断)' : ''}`,
+                            timestamp: new Date().toISOString()
+                        });
+                    } catch (e) {
+                        await chatStore.addMessage({
+                            role: 'system',
+                            content: `[错误] 读取文件失败: ${e.message}`,
+                            timestamp: new Date().toISOString()
+                        });
+                    }
+                } else if (call.type === 'github_write') {
+                    await chatStore.addMessage({
+                        role: 'system',
+                        type: 'confirm_commit',
+                        confirmData: call,
+                        content: `[待确认提交]\n文件: ${call.path}\n分支: ${call.branch}\n\n回复"确认"执行提交`,
+                        timestamp: new Date().toISOString()
+                    });
+                }
+                scrollToBottom();
+            }
+        }
+
+        if (data.debug) debugInfo.value = data.debug;
+    }
+}
+
+function enterSelectMode() { selectMode.value = true; selectedIds.value = [] }
+function cancelSelect() { selectMode.value = false; selectedIds.value = [] }
+
+function toggleSelect(msgId) {
+    const idx = selectedIds.value.indexOf(msgId)
+    if (idx > -1) selectedIds.value.splice(idx, 1)
+    else selectedIds.value.push(msgId)
+}
+
+async function deleteSelected() {
+    if (!confirm(`确定删除选中的 ${selectedIds.value.length} 条消息？`)) return
+    for (const id of selectedIds.value) {
+        await api(`/api/message/${id}`, { method: 'DELETE' })
+        chatStore.messages = chatStore.messages.filter(m => m.id !== id)
+    }
+    cancelSelect()
+}
+
+async function bookmarkSelected() {
+    for (const id of selectedIds.value) {
+        const msg = chatStore.messages.find(m => m.id === id)
+        if (msg) await handleBookmark(msg)
+    }
+    cancelSelect()
+}
+
+async function screenshotSelected() {
+    if (selectedIds.value.length === 0) return
+    try {
+        const html2canvas = (await import('html2canvas')).default
+        const container = messagesContainer.value
+        if (!container) return
+        const allBubbles = container.querySelectorAll('.bubble-wrapper')
+        const selectedBubbles = []
+        allBubbles.forEach(bubble => {
+            const msgId = bubble.dataset.msgId
+            if (selectedIds.value.some(id => String(id) === String(msgId))) selectedBubbles.push(bubble)
+        })
+        if (selectedBubbles.length === 0) { cancelSelect(); return }
+        const first = selectedBubbles[0].getBoundingClientRect()
+        const last = selectedBubbles[selectedBubbles.length - 1].getBoundingClientRect()
+        const totalHeight = last.bottom - first.top + 40
+        const screenshotDiv = document.createElement('div')
+        screenshotDiv.style.cssText = `position:fixed;left:-9999px;top:0;width:${container.offsetWidth}px;min-height:${totalHeight}px;background:linear-gradient(180deg,#FFFBFA 0%,#FFF0F2 60%,#FFE9ED 100%);padding:20px 16px;box-sizing:border-box;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC',sans-serif;`
+        selectedBubbles.forEach(bubble => {
+            const clone = bubble.cloneNode(true)
+            clone.classList.remove('selected', 'select-mode')
+            clone.style.marginBottom = '16px'
+            clone.style.paddingLeft = '0'
+            const checkbox = clone.querySelector('.select-checkbox')
+            if (checkbox) checkbox.style.display = 'none'
+            const actionBar = clone.querySelector('.inline-action-bar')
+            if (actionBar) actionBar.style.display = 'none'
+            const bubbleEl = clone.querySelector('.bubble')
+            if (bubbleEl) {
+                const original = bubble.querySelector('.bubble')
+                if (original) {
+                    const cs = window.getComputedStyle(original)
+                    bubbleEl.style.background = cs.background
+                    bubbleEl.style.color = cs.color
+                    bubbleEl.style.borderRadius = cs.borderRadius
+                    bubbleEl.style.padding = cs.padding
+                    bubbleEl.style.fontSize = cs.fontSize
+                    bubbleEl.style.lineHeight = cs.lineHeight
+                    bubbleEl.style.boxShadow = cs.boxShadow
+                }
+            }
+            screenshotDiv.appendChild(clone)
+        })
+        document.body.appendChild(screenshotDiv)
+        const images = screenshotDiv.querySelectorAll('img')
+        await Promise.all([...images].map(img => {
+            if (img.complete) return Promise.resolve()
+            return new Promise(resolve => { img.onload = resolve; img.onerror = resolve; setTimeout(resolve, 2000) })
+        }))
+        const canvas = await html2canvas(screenshotDiv, { backgroundColor: null, scale: 2, useCORS: true, allowTaint: true, logging: false, windowWidth: container.offsetWidth + 32 })
+        document.body.removeChild(screenshotDiv)
+        const link = document.createElement('a')
+        link.download = `聊天记录_${new Date().toLocaleDateString('zh-CN').replace(/\//g, '')}.png`
+        link.href = canvas.toDataURL('image/png', 0.95)
+        link.click()
+        cancelSelect()
+    } catch (e) { console.error('截图失败:', e); cancelSelect() }
+}
+
+async function handleBookmark(msg) {
+    try {
+        await api(`/api/bookmarks/${personaId.value}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: msg.type || 'message', content: msg.content, source_id: msg.id }) })
+    } catch { }
+}
+
+async function handleEdit(msgId, newContent) {
+    const msg = chatStore.messages.find(m => m.id === msgId)
+    if (msg) msg.content = newContent
+    await api(`/api/message/${msgId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: newContent }) })
+}
+
+async function handleDelete(msgId) {
+    if (!confirm('确定删除此消息？')) return
+    try {
+        await api(`/api/message/${msgId}`, { method: 'DELETE' })
+        // 关键：同时清理当前展示数组和全量缓存数组
+        chatStore.messages = chatStore.messages.filter(m => String(m.id) !== String(msgId))
+        chatStore.allMessages = chatStore.allMessages.filter(m => String(m.id) !== String(msgId))
+    } catch (e) {
+        console.error('Delete failed', e)
+    }
+}
+
+async function handleRegenerate(msgId) {
+    chatStore.messages = chatStore.messages.filter(m => m.id !== msgId)
+    await api(`/api/message/${msgId}`, { method: 'DELETE' })
+    const lastUser = [...chatStore.messages].reverse().find(m => m.role === 'user')
+    if (lastUser) {
+        if (isLocalMode) {
+            await localSendAndReply(lastUser.content)
+        } else {
+            send({ type: 'chat', content: lastUser.content, personaId: personaId.value })
+            isTyping.value = true
+        }
+    }
+}
+
+function goToDetail() { showPanel.value = false; router.push(`/persona-detail/${personaId.value}`) }
+
+async function clearChat() {
+    if (!confirm('清理这段时间的对话痕迹？')) return
+    await api(`/api/messages/${personaId.value}`, { method: 'DELETE' })
+    chatStore.clearMessages()
+    showPanel.value = false
+}
+
+function goBack() {
+    const from = route.query.from
+    if (from === 'echoes') {
+        sessionStorage.setItem('home_return_page', '2')
+        router.push('/')
+    } else if (window.history.length > 1) {
+        router.back()
+    } else {
+        router.push('/')
+    }
+}
+
+function loadOlder() { chatStore.loadMore() }
+function handleScroll() { }
+
+onMounted(async () => {
+    document.querySelector('.screen-content').style.overflow = 'hidden'
+    clearHandlers()
+    loadPersonaName()
+    chatStore.clearMessages()
+    await chatStore.loadPersonaMessages(personaId.value)
+    // 历史消息加载完才注册 WebSocket 监听
+    onMessage(handleIncoming)
+    scrollToBottom()
+})
+
+onUnmounted(() => {
+    removeHandler(handleIncoming)
+    const customStyle = document.getElementById('custom-chat-theme')
+    if (customStyle) customStyle.remove()
+})
+
+watch(() => chatStore.messages.length, scrollToBottom)
+
+watch(personaId, async (newId, oldId) => {
+    if (!newId || newId === oldId) return
+    clearHandlers()
+    onMessage(handleIncoming)
+    chatStore.clearMessages()
+    await chatStore.loadPersonaMessages(newId)
+    await loadPersonaName()
+    scrollToBottom()
+})
+</script>
+
+<style>
+/* ===== 基础结构（默认主题）===== */
+.chat-page {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow: hidden;
+    position: relative;
+    background: linear-gradient(180deg, #FFF5F7 0%, #FFEEF2 50%, #FFE6EC 100%);
+}
+
+/* ===== 默认 Header（居中名字，无头像）===== */
+.chat-header {
+    display: flex;
+    align-items: center;
+    padding: calc(env(safe-area-inset-top, 44px) + 8px) 16px 12px;
+    flex-shrink: 0;
+    background: rgba(255, 248, 252, 0.85);
+    backdrop-filter: saturate(180%) blur(20px);
+    -webkit-backdrop-filter: saturate(180%) blur(20px);
+    border-bottom: 1px solid rgba(217, 163, 175, 0.12);
+    position: relative;
+}
+
+.back-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 4px;
+    color: #D9A3AF;
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+    z-index: 1;
+}
+
+.back-btn svg {
+    width: 20px;
+    height: 20px;
+}
+
+.header-info {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    cursor: pointer;
+}
+
+.header-avatar {
+    display: none;
+}
+
+.header-text {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1px;
+}
+
+.header-name {
+    font-size: 16px;
+    font-weight: 700;
+    color: #4A3F41;
+    letter-spacing: 0.3px;
+}
+
+.header-status {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    color: #B8A9AC;
+}
+
+.status-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: #4caf50;
+}
+
+.header-actions {
+    display: flex;
+    gap: 4px;
+    flex-shrink: 0;
+    margin-left: auto;
+    z-index: 1;
+}
+
+.header-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 6px;
+    color: #B8A9AC;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+}
+
+.header-btn svg {
+    width: 18px;
+    height: 18px;
+}
+
+.header-btn:active {
+    background: rgba(217, 163, 175, 0.1);
+}
+
+.header-btn.danger {
+    color: #c07070;
+}
+
+/* 多选栏 */
+.select-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 16px;
+    background: rgba(217, 163, 175, 0.08);
+    border-bottom: 1px solid rgba(217, 163, 175, 0.15);
+    flex-shrink: 0;
+}
+
+.select-count {
+    font-size: 13px;
+    color: #D9A3AF;
+    font-weight: 500;
+}
+
+.select-actions {
+    display: flex;
+    gap: 16px;
+}
+
+.select-actions button {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 10px;
+    color: #B8A9AC;
+    font-family: inherit;
+}
+
+.select-actions button svg {
+    width: 18px;
+    height: 18px;
+}
+
+.slide-down-enter-active {
+    transition: all 0.25s ease;
+}
+
+.slide-down-leave-active {
+    transition: all 0.2s ease;
+}
+
+.slide-down-enter-from,
+.slide-down-leave-to {
+    opacity: 0;
+    transform: translateY(-10px);
+}
+
+/* 消息列表 */
+.chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px 16px;
+    -webkit-overflow-scrolling: touch;
+    min-height: 0;
+}
+
+.load-more {
+    text-align: center;
+    padding: 12px;
+    color: #B8A9AC;
+    font-size: 12px;
+    cursor: pointer;
+    opacity: 0.4;
+}
+
+/* 时间戳 */
+.time-divider {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 10px 0;
+}
+
+.time-divider span {
+    font-size: 11px;
+    color: #B8A9AC;
+    background: rgba(255, 255, 255, 0.6);
+    padding: 3px 10px;
+    border-radius: 10px;
+    backdrop-filter: blur(8px);
+}
+
+/* 浮动面板 */
+.float-panel {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 100;
+    display: flex;
+    justify-content: flex-end;
+    padding-top: calc(env(safe-area-inset-top, 44px) + 60px);
+    padding-right: 12px;
+}
+
+.panel-content {
+    background: rgba(255, 255, 255, 0.75);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-radius: 20px;
+    border: 1px solid rgba(255, 240, 242, 0.5);
+    padding: 8px;
+    width: 200px;
+    box-shadow: 0 8px 32px rgba(217, 163, 175, 0.15);
+    align-self: flex-start;
+}
+
+.panel-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 14px;
+    border-radius: 14px;
+    cursor: pointer;
+}
+
+.panel-item:active {
+    background: rgba(217, 163, 175, 0.06);
+}
+
+.panel-icon {
+    font-size: 14px;
+    opacity: 0.6;
+    width: 20px;
+    text-align: center;
+}
+
+.panel-title {
+    font-size: 13px;
+    color: #4A3F41;
+}
+
+.panel-sub {
+    font-size: 10px;
+    color: #B8A9AC;
+    margin-top: 1px;
+}
+
+.panel-enter-active {
+    transition: opacity 0.3s;
+}
+
+.panel-enter-active .panel-content {
+    transition: transform 0.35s, opacity 0.3s;
+}
+
+.panel-leave-active {
+    transition: opacity 0.2s;
+}
+
+.panel-leave-active .panel-content {
+    transition: transform 0.2s, opacity 0.2s;
+}
+
+.panel-enter-from {
+    opacity: 0;
+}
+
+.panel-enter-from .panel-content {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.95);
+}
+
+.panel-leave-to {
+    opacity: 0;
+}
+
+.panel-leave-to .panel-content {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.97);
+}
+
+/* ===== 极简主题 = iMessage ===== */
+.theme-minimal {
+    background: #F5F5F7;
+}
+
+.theme-minimal .chat-header {
+    background: rgba(245, 245, 247, 0.92);
+    backdrop-filter: saturate(180%) blur(20px);
+    border-bottom: 0.5px solid rgba(0, 0, 0, 0.1);
+}
+
+.theme-minimal .header-info {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+}
+
+.theme-minimal .back-btn {
+    color: #007AFF;
+}
+
+.theme-minimal .header-btn {
+    color: #007AFF;
+}
+
+.theme-minimal .header-name {
+    font-size: 14px;
+    color: #1c1c1e;
+    font-weight: 600;
+}
+
+.theme-minimal .header-status {
+    color: #8E8E93;
+}
+
+.theme-minimal .status-dot {
+    background: #34C759;
+}
+
+.theme-minimal .time-divider span {
+    background: transparent;
+    backdrop-filter: none;
+    color: #8E8E93;
+    font-weight: 500;
+}
+
+.theme-minimal .panel-content {
+    background: rgba(255, 255, 255, 0.92);
+    border-color: rgba(0, 0, 0, 0.06);
+    border-radius: 14px;
+}
+
+.theme-minimal .panel-title {
+    color: #1c1c1e;
+}
+
+.theme-minimal .panel-sub {
+    color: #8E8E93;
+}
+
+.theme-minimal .select-count {
+    color: #007AFF;
+}
+
+.theme-minimal :deep(.chat-input-wrapper) {
+    background: rgba(245, 245, 247, 0.95);
+    border-top: 0.5px solid rgba(0, 0, 0, 0.1);
+    backdrop-filter: blur(20px);
+}
+
+.theme-minimal :deep(textarea) {
+    background: #FFFFFF;
+    border-color: rgba(0, 0, 0, 0.08);
+    color: #1c1c1e;
+    border-radius: 20px;
+}
+
+.theme-minimal :deep(.send-btn) {
+    background: #007AFF;
+    box-shadow: none;
+}
+
+.theme-minimal :deep(.more-btn) {
+    border-color: rgba(0, 0, 0, 0.1);
+    color: #007AFF;
+}
+
+.header-status.status-busy {
+    color: #C4962A;
+}
+
+.status-dot.dot-busy {
+    background: #F5C24E;
+    animation: pulse-busy 2s ease-in-out infinite;
+}
+
+@keyframes pulse-busy {
+
+    0%,
+    100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+
+    50% {
+        opacity: 0.5;
+        transform: scale(0.8);
+    }
+}
+
+.transfer-category-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 10px;
+}
+
+.transfer-cat-chip {
+    padding: 5px 12px;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 240, 242, 0.5);
+    background: rgba(255, 255, 255, 0.5);
+    font-size: 12px;
+    color: #6B5B5E;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.transfer-cat-chip.active {
+    background: rgba(232, 192, 201, 0.15);
+    border-color: rgba(217, 163, 175, 0.4);
+    color: #D9A3AF;
+    font-weight: 600;
+}
+
+/* ===== 留白主题 = Discord 深色 ===== */
+.theme-留白 {
+    background: #313338;
+}
+
+.theme-留白 .chat-header {
+    background: rgba(43, 45, 49, 0.98);
+    backdrop-filter: none;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.4);
+}
+
+.theme-留白 .header-name {
+    color: #FFFFFF;
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.theme-留白 .header-status {
+    color: #B5BAC1;
+}
+
+.theme-留白 .status-dot {
+    background: #23A55A;
+}
+
+.theme-留白 .back-btn {
+    color: #B5BAC1;
+}
+
+.theme-留白 .header-btn {
+    color: #B5BAC1;
+}
+
+.theme-留白 .chat-messages {
+    background: #313338;
+}
+
+.theme-留白 .time-divider span {
+    background: transparent;
+    backdrop-filter: none;
+    color: #949BA4;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.theme-留白 .panel-content {
+    background: rgba(30, 31, 34, 0.98);
+    border-color: rgba(0, 0, 0, 0.4);
+    border-radius: 8px;
+}
+
+.theme-留白 .panel-title {
+    color: #DBDEE1;
+}
+
+.theme-留白 .panel-sub {
+    color: #949BA4;
+}
+
+.theme-留白 .select-bar {
+    background: rgba(43, 45, 49, 0.98);
+    border-color: rgba(0, 0, 0, 0.3);
+}
+
+.theme-留白 .select-count {
+    color: #5865F2;
+}
+
+.theme-留白 .select-actions button {
+    color: #B5BAC1;
+}
+
+.theme-留白 :deep(.chat-input-wrapper) {
+    background: rgba(43, 45, 49, 0.98);
+    border-top: 1px solid rgba(0, 0, 0, 0.3);
+}
+
+.theme-留白 :deep(textarea) {
+    background: #383A40;
+    border-color: transparent;
+    color: #DBDEE1;
+    border-radius: 8px;
+}
+
+.theme-留白 :deep(textarea::placeholder) {
+    color: #6D6F78;
+}
+
+.theme-留白 :deep(.send-btn) {
+    background: #5865F2;
+    box-shadow: none;
+}
+
+.theme-留白 :deep(.more-btn) {
+    border-color: rgba(255, 255, 255, 0.08);
+    color: #B5BAC1;
+    background: #383A40;
+}
+
+/* ===== 同框主题 = iMessage ===== */
+.theme-together {
+    background: #FFFFFF;
+}
+
+.theme-together .chat-header {
+    background: rgba(255, 255, 255, 0.92);
+    backdrop-filter: saturate(180%) blur(20px);
+    -webkit-backdrop-filter: saturate(180%) blur(20px);
+    border-bottom: 0.5px solid rgba(0, 0, 0, 0.1);
+}
+
+.theme-together .header-info {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    flex-direction: column;
+    align-items: center;
+}
+
+.theme-together .header-avatar {
+    display: flex;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    overflow: hidden;
+    margin-bottom: 2px;
+}
+
+.theme-together .header-name {
+    font-size: 13px;
+    color: #1c1c1e;
+    font-weight: 600;
+}
+
+.theme-together .header-status {
+    color: #8E8E93;
+    font-size: 11px;
+}
+
+.theme-together .status-dot {
+    background: #34C759;
+}
+
+.theme-together .back-btn {
+    color: #007AFF;
+}
+
+.theme-together .header-btn {
+    color: #007AFF;
+}
+
+.theme-together .time-divider span {
+    background: transparent;
+    backdrop-filter: none;
+    color: #8E8E93;
+    font-weight: 500;
+    font-size: 11px;
+}
+
+.theme-together .panel-content {
+    background: rgba(255, 255, 255, 0.95);
+    border-color: rgba(0, 0, 0, 0.06);
+    border-radius: 14px;
+}
+
+.theme-together .panel-title {
+    color: #1c1c1e;
+}
+
+.theme-together .panel-sub {
+    color: #8E8E93;
+}
+
+.theme-together .select-count {
+    color: #007AFF;
+}
+
+.theme-together :deep(.chat-input-wrapper) {
+    background: rgba(255, 255, 255, 0.95);
+    border-top: 0.5px solid rgba(0, 0, 0, 0.1);
+    backdrop-filter: blur(20px);
+}
+
+.theme-together :deep(textarea) {
+    background: #FFFFFF;
+    border: 1.5px solid rgba(0, 0, 0, 0.12);
+    color: #1c1c1e;
+    border-radius: 20px;
+    padding: 8px 14px;
+}
+
+.theme-together :deep(textarea::placeholder) {
+    color: #8E8E93;
+}
+
+.theme-together :deep(.send-btn) {
+    background: #007AFF;
+    box-shadow: none;
+    border-radius: 50%;
+}
+
+.theme-together :deep(.more-btn) {
+    border-color: rgba(0, 0, 0, 0.1);
+    color: #007AFF;
+    background: rgba(0, 122, 255, 0.06);
+}
+
+/* ===== 液态主题 = iOS 26 液态玻璃 ===== */
+.theme-liquid {
+    background: linear-gradient(160deg, #F0F4FF 0%, #F5F0FF 40%, #FFF0F5 70%, #F0FFF8 100%);
+}
+
+.theme-liquid .chat-header {
+    background: rgba(255, 255, 255, 0.25);
+    backdrop-filter: saturate(200%) blur(40px) brightness(1.1);
+    -webkit-backdrop-filter: saturate(200%) blur(40px) brightness(1.1);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.6);
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.5) inset;
+}
+
+.theme-liquid .header-name {
+    color: #1c1c1e;
+    font-weight: 700;
+}
+
+.theme-liquid .header-status {
+    color: rgba(60, 60, 67, 0.6);
+}
+
+.theme-liquid .back-btn {
+    color: #5E5CE6;
+}
+
+.theme-liquid .header-btn {
+    color: rgba(60, 60, 67, 0.6);
+}
+
+.theme-liquid .time-divider span {
+    background: rgba(255, 255, 255, 0.5);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.6);
+    color: rgba(60, 60, 67, 0.6);
+    border-radius: 20px;
+    padding: 3px 12px;
+    font-size: 11px;
+}
+
+.theme-liquid .panel-content {
+    background: rgba(255, 255, 255, 0.35);
+    backdrop-filter: saturate(200%) blur(40px);
+    -webkit-backdrop-filter: saturate(200%) blur(40px);
+    border: 1px solid rgba(255, 255, 255, 0.6);
+    border-radius: 20px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.08);
+}
+
+.theme-liquid .panel-title {
+    color: #1c1c1e;
+}
+
+.theme-liquid .panel-sub {
+    color: rgba(60, 60, 67, 0.6);
+}
+
+.theme-liquid :deep(.chat-input-wrapper) {
+    background: rgba(255, 255, 255, 0.25);
+    backdrop-filter: saturate(200%) blur(40px);
+    -webkit-backdrop-filter: saturate(200%) blur(40px);
+    border-top: 1px solid rgba(255, 255, 255, 0.5);
+}
+
+.theme-liquid :deep(textarea) {
+    background: rgba(255, 255, 255, 0.5);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1.5px solid rgba(255, 255, 255, 0.7);
+    color: #1c1c1e;
+    border-radius: 22px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06), 0 1px 0 rgba(255, 255, 255, 0.8) inset;
+}
+
+.theme-liquid :deep(textarea::placeholder) {
+    color: rgba(60, 60, 67, 0.4);
+}
+
+.theme-liquid :deep(.send-btn) {
+    background: linear-gradient(135deg, #5E5CE6, #BF5AF2);
+    box-shadow: 0 4px 12px rgba(94, 92, 230, 0.35);
+    border-radius: 50%;
+}
+
+.theme-liquid :deep(.more-btn) {
+    background: rgba(255, 255, 255, 0.5);
+    backdrop-filter: blur(12px);
+    border: 1.5px solid rgba(255, 255, 255, 0.7);
+    color: #5E5CE6;
+}
+
+/* ===== 微信主题 ===== */
+.theme-wechat {
+    background: #EDEDED;
+}
+
+.theme-wechat .chat-header {
+    background: #F7F7F7;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    border-bottom: 1px solid #D9D9D9;
+}
+
+.theme-wechat .header-info {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+}
+
+.theme-wechat .header-name {
+    font-size: 17px;
+    font-weight: 600;
+    color: #191919;
+}
+
+.theme-wechat .header-status {
+    display: none;
+}
+
+.theme-wechat .back-btn {
+    color: #191919;
+}
+
+.theme-wechat .header-btn {
+    color: #191919;
+}
+
+.theme-wechat .chat-messages {
+    background: #EDEDED;
+}
+
+.theme-wechat .time-divider span {
+    background: rgba(0, 0, 0, 0.08);
+    backdrop-filter: none;
+    color: #888;
+    font-size: 12px;
+    border-radius: 4px;
+    padding: 2px 8px;
+}
+
+.theme-wechat .panel-content {
+    background: #FFFFFF;
+    border-color: #E0E0E0;
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+}
+
+.theme-wechat .panel-title {
+    color: #191919;
+}
+
+.theme-wechat .panel-sub {
+    color: #888;
+}
+
+.theme-wechat .select-bar {
+    background: #F7F7F7;
+    border-color: #D9D9D9;
+}
+
+.theme-wechat :deep(.chat-input-wrapper) {
+    background: #F7F7F7;
+    border-top: 0.5px solid #D9D9D9;
+    backdrop-filter: none;
+    padding: 8px 12px;
+}
+
+.theme-wechat :deep(textarea) {
+    background: #FFFFFF;
+    border-radius: 6px;
+    color: #191919;
+    border: 1px solid #D9D9D9;
+    padding: 8px 12px;
+    min-height: 36px;
+}
+
+.theme-wechat :deep(textarea::placeholder) {
+    color: #BDBDBD;
+}
+
+.theme-wechat :deep(.send-btn) {
+    background: #07C160;
+    box-shadow: none;
+    border-radius: 6px;
+    width: 64px;
+    font-size: 15px;
+    font-weight: 500;
+}
+
+.theme-wechat :deep(.more-btn) {
+    border-color: rgba(0, 0, 0, 0.1);
+    color: #191919;
+    background: rgba(255, 255, 255, 0.8);
+    border-radius: 6px;
+}
+</style>

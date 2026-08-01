@@ -1,8 +1,0 @@
-{
-  "appId": "com.ovo.melt",
-  "appName": "Melt",
-  "webDir": "dist-local",
-  "server": {
-    "androidScheme": "https"
-  }
-}

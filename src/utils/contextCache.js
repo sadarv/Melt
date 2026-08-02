@@ -310,7 +310,9 @@ export function getWorldbookInjection(personaId, userMessage) {
         .split(/[,，]/)
         .map((k) => k.trim())
         .filter(Boolean);
-      const hit = kws.some((k) => userMessage.includes(k));
+      const hit = userMessage
+        ? kws.some((k) => userMessage.includes(k))
+        : false;
       if (!hit && item.position === "before_user") continue;
     }
     const full = allBooks.find((b) => b.id === item.id);

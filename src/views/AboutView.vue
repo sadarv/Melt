@@ -361,7 +361,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onActivated } from 'vue'
 import { api } from '@/utils/api'
 import SoftButton from '@/components/ui/SoftButton.vue'
 import BlurModal from '@/components/ui/BlurModal.vue'
@@ -505,13 +505,22 @@ function getGridPoints(radius) {
 async function loadPersonas() {
     try {
         const res = await api('/api/personas/all')
-        personas.value = await res.json()
+        let list = await res.json()
+
+        // 过滤隐藏的角色
+        const hidden = JSON.parse(localStorage.getItem('hidden_personas') || '[]')
+        list = list.filter(p => !hidden.includes(p.id))
+
+        // 置顶排序
         const pinnedList = JSON.parse(localStorage.getItem('pinned_personas') || '[]')
-        personas.value.sort((a, b) => {
+        list.sort((a, b) => {
             if (pinnedList.includes(a.id) && !pinnedList.includes(b.id)) return -1
             if (!pinnedList.includes(a.id) && pinnedList.includes(b.id)) return 1
             return 0
         })
+
+        personas.value = list
+
         try {
             const latestRes = await api('/api/messages/latest-persona')
             const latestData = await latestRes.json()
@@ -671,6 +680,7 @@ async function addObserve() {
 }
 
 onMounted(loadPersonas)
+onActivated(loadPersonas)
 </script>
 
 <style scoped>

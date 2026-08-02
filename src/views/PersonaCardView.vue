@@ -291,7 +291,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onActivated } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '@/utils/api'
 
@@ -343,7 +343,8 @@ async function loadPersonas() {
     try {
         const res = await api('/api/personas/all')
         const data = await res.json()
-        personas.value = data
+        const hidden = JSON.parse(localStorage.getItem('hidden_personas') || '[]')
+        personas.value = data.filter(p => !hidden.includes(p.id))
     } catch (e) {
         console.error('加载角色失败:', e)
     } finally {
@@ -401,11 +402,20 @@ async function deletePersona(p) {
     try {
         await api(`/api/messages/${p.id}`, { method: 'DELETE' })
         await api(`/api/memories/${p.id}/clear`, { method: 'DELETE' })
-        if (p.custom || p.id.startsWith('custom_')) {
+        const isCustom = p.custom === true || String(p.id).startsWith('custom_')
+        if (isCustom) {
             await api(`/api/personas/custom/${p.id}`, { method: 'DELETE' })
         } else {
             await api(`/api/personas/builtin/${p.id}/hide`, { method: 'POST' })
+            const hidden = JSON.parse(localStorage.getItem('hidden_personas') || '[]')
+            if (!hidden.includes(p.id)) {
+                hidden.push(p.id)
+                localStorage.setItem('hidden_personas', JSON.stringify(hidden))
+            }
         }
+        sessionStorage.removeItem('personas_loaded')
+        sessionStorage.removeItem('cached_personas')
+        sessionStorage.removeItem('home_data_loaded')
         showDetail.value = false
         await loadPersonas()
     } catch (e) {
@@ -525,6 +535,7 @@ async function saveImportedPersona(persona) {
 }
 
 onMounted(loadPersonas)
+onActivated(loadPersonas)
 </script>
 
 <style scoped>

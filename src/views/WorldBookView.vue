@@ -347,6 +347,7 @@ const bookForm = reactive({
     position: 'before_char',
     keywords: '',
     keyword_enabled: false,
+    category: '',   // 加这行
 })
 
 function positionLabel(pos) {
@@ -465,6 +466,7 @@ function editBook(book) {
     bookForm.position = book.position || 'before_char'
     bookForm.keywords = book.keywords || ''
     bookForm.keyword_enabled = book.keyword_enabled || false
+    bookForm.category = book.category || ''   // 加这行
 }
 
 async function saveBook() {
@@ -505,6 +507,7 @@ function closeModal() {
     importError.value = ''
     originalContent.value = ''
     compressMsg.value = ''
+    bookForm.category = '' 
 }
 
 function toggleSelectMode() {

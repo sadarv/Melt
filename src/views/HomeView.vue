@@ -204,9 +204,22 @@
                                     'cal-period-predicted': day && !periodData.includes(getDayKey(day)) && predictedPeriodDays.includes(getDayKey(day))
                                 }" @click="day && selectDay(day)">
                                     <span v-if="day">{{ day }}</span>
-                                    <span v-if="day && getDayStatusForGrid(day)" class="cal-status-emoji">
-                                        {{ getDayStatusForGrid(day).emoji }}
-                                    </span>
+
+                                    <!-- 状态 emoji：左上角，两人并排 -->
+                                    <div v-if="day" class="cal-status-row">
+                                        <span v-if="getDayData(day, 'user').status">
+                                            {{statusOptions.find(s => s.key === getDayData(day, 'user').status)?.emoji
+                                            }}
+                                        </span>
+                                        <span v-if="getDayData(day, 'char').status">
+                                            {{statusOptions.find(s => s.key === getDayData(day, 'char').status)?.emoji
+                                            }}
+                                        </span>
+                                    </div>
+                                    <!-- 日程红点：下方 -->
+                                    <div v-if="day && getDayEvents(day, 'char').filter(e => e.fromSchedule).length > 0"
+                                        class="cal-schedule-dot"></div>
+
                                 </div>
                             </div>
                             <div class="cal-legend">
@@ -680,6 +693,12 @@
                             </div>
                         </div>
                         <div class="hero-label-bottom">在一起的每一天都值得珍藏 ✿</div>
+
+                        <!-- 更新提示小圆点 -->
+                        <div v-if="hasUpdate" class="update-badge" @click="acknowledgeUpdate">
+                            有更新
+                        </div>
+
                     </div>
 
                     <!-- 横滑信息条：每张卡片独立聚焦 -->
@@ -698,7 +717,7 @@
                         <div class="slider-card-v8 stats-card focusable-card" @click="toggleChatStatLocal">
                             <span class="s-title">聊天统计 · {{ (recentPersona || currentAi).note || (recentPersona ||
                                 currentAi).name
-                            }}</span>
+                                }}</span>
                             <div class="s-value">{{ chatStatDisplay.v }}</div>
                             <span class="s-sub">{{ chatStatDisplay.l }}</span>
                             <div class="s-dots">
@@ -899,7 +918,7 @@
                             <span class="p-msg">{{ recentPersona?.lastMessage || leftBubbleText }}</span>
                         </div>
                         <span class="p-time">{{ recentPersona?.lastMessageTime ? formatLastTime(recentPersona) : '刚刚'
-                        }}</span>
+                            }}</span>
                     </div>
 
                 </div>
@@ -1039,7 +1058,7 @@
                                         <span v-else>{{ contextMenu.persona?.avatar || '💬' }}</span>
                                     </div>
                                     <span class="ctx-name">{{ contextMenu.persona?.note || contextMenu.persona?.name
-                                    }}</span>
+                                        }}</span>
                                 </div>
                                 <div class="ctx-divider"></div>
                                 <button class="ctx-item" @click="pinFromMenu(contextMenu.persona?.id)">
@@ -1233,7 +1252,7 @@
                                     class="dp-input dp-edit-input" @blur="saveEditEvent(selectedDay, i)"
                                     @keyup.enter="saveEditEvent(selectedDay, i)" />
                                 <span v-else class="dp-event-text" @click="startEditEvent(i, ev.text)">{{ ev.text
-                                }}</span>
+                                    }}</span>
                                 <button class="dp-event-del" @click="removeEvent(selectedDay, i)">×</button>
                             </div>
                         </template>
@@ -1315,7 +1334,7 @@
             </div>
         </BlurModal>
 
-        <p class="version-text">v1.1.1</p>
+        <p class="version-text">v1.1.0</p>
     </div>
 </template>
 
@@ -1334,6 +1353,7 @@ const route = useRoute()
 
 // ===== 全部状态声明 =====
 const currentPage = ref(1)
+const hasUpdate = ref(false)
 const currentAi = ref({ name: '哥哥', note: '', avatar: '💬', avatarUrl: '', personaId: '' })
 const togetherDays = ref(1)
 const todayCard = ref('加载中...')
@@ -2030,7 +2050,7 @@ function getDayEvents(day, role) {
         const pid = currentAi.value.personaId || currentAi.value.id
         const schedules = JSON.parse(localStorage.getItem(`schedules_${pid}`) || '[]')
         const scheduleEvents = schedules
-            .filter(s => s.enabled)
+            .filter(s => s.enabled && s.date === getDayKey(day))
             .map(s => ({
                 id: `sch_${s.id}`,
                 text: `${String(s.cron_hour).padStart(2, '0')}:${String(s.cron_minute).padStart(2, '0')} ${s.label}`,
@@ -2148,7 +2168,7 @@ function getScheduleData(days, role) {
         if (role === 'char') {
             const pid = currentAi.value.personaId || currentAi.value.id
             const schedules = JSON.parse(localStorage.getItem(`schedules_${pid}`) || '[]')
-            schedules.filter(s => s.enabled).forEach(s => {
+            schedules.filter(s => s.enabled && s.date === key).forEach(s => {
                 result.push({
                     text: `${String(s.cron_hour).padStart(2, '0')}:${String(s.cron_minute || 0).padStart(2, '0')} ${s.label}`,
                     date: key,
@@ -2157,6 +2177,7 @@ function getScheduleData(days, role) {
                 })
             })
         }
+
     }
     return result
 }
@@ -2837,7 +2858,6 @@ function setupScrollFocus() {
     })
 }
 
-// ===== onMounted =====
 async function refreshPreviews() {
     const pid = currentAi.value.personaId
     if (!pid) return
@@ -2890,10 +2910,18 @@ function handleVisibilityChange() {
 
 //只保留注册监听
 onMounted(async () => {
+    // 版本更新检测
+    const currentVersion = '1.1.0'
+    const lastVersion = localStorage.getItem('app_version')
+    if (lastVersion && lastVersion !== currentVersion) {
+        hasUpdate.value = true
+    }
+    localStorage.setItem('app_version', currentVersion)
+
     loadCards()
     calculateDays()
     calculateHabitatDays()
-loadCustomStatusOptions()
+    loadCustomStatusOptions()
 
     const returnPage = sessionStorage.getItem('home_return_page')
     if (returnPage !== null) {
@@ -3018,7 +3046,6 @@ loadCustomStatusOptions()
     setTimeout(setupScrollFocus, 300)
 })
 
-// onUnmounted 和 onMounted 并列
 onUnmounted(() => {
     document.removeEventListener('visibilitychange', handleVisibilityChange)
 })
@@ -4566,19 +4593,6 @@ onUnmounted(() => {
     background: rgba(232, 192, 201, 0.15);
     font-weight: 700;
     color: #D9A3AF;
-}
-
-/* 有记录的格子：只加底部小线 */
-.cal-has-event::after {
-    content: '';
-    position: absolute;
-    bottom: 2px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 4px;
-    height: 4px;
-    border-radius: 50%;
-    background: #D9A3AF;
 }
 
 .cal-today.cal-has-event::after {
@@ -7613,31 +7627,34 @@ onUnmounted(() => {
     align-items: center;
     margin-top: 8px;
     padding-top: 8px;
-    border-top: 1px solid rgba(217,163,175,0.1);
+    border-top: 1px solid rgba(217, 163, 175, 0.1);
 }
+
 .add-emoji-input {
     width: 48px;
     height: 32px;
-    border: 1px solid rgba(217,163,175,0.3);
+    border: 1px solid rgba(217, 163, 175, 0.3);
     border-radius: 10px;
     text-align: center;
     font-size: 18px;
     outline: none;
-    background: rgba(255,255,255,0.5);
+    background: rgba(255, 255, 255, 0.5);
     font-family: inherit;
 }
+
 .add-emoji-label {
     flex: 1;
     height: 32px;
-    border: 1px solid rgba(217,163,175,0.3);
+    border: 1px solid rgba(217, 163, 175, 0.3);
     border-radius: 10px;
     padding: 0 10px;
     font-size: 12px;
     outline: none;
-    background: rgba(255,255,255,0.5);
+    background: rgba(255, 255, 255, 0.5);
     font-family: inherit;
     color: #4A3F41;
 }
+
 .add-emoji-confirm {
     height: 32px;
     padding: 0 12px;
@@ -7651,4 +7668,54 @@ onUnmounted(() => {
     font-family: inherit;
 }
 
+.cal-status-row {
+    position: absolute;
+    top: 1px;
+    left: 1px;
+    display: flex;
+    gap: 1px;
+    font-size: 7px;
+    line-height: 1;
+    pointer-events: none;
+}
+
+.cal-schedule-dot {
+    position: absolute;
+    bottom: 2px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: #D9A3AF;
+    pointer-events: none;
+}
+
+.update-badge {
+    position: absolute;
+    bottom: 14px;
+    right: 14px;
+    background: rgba(232, 192, 201, 0.25);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 240, 242, 0.5);
+    border-radius: 12px;
+    padding: 4px 10px;
+    font-size: 11px;
+    color: #D9A3AF;
+    cursor: pointer;
+    animation: updatePulse 2s ease-in-out infinite;
+    z-index: 2;
+}
+
+@keyframes updatePulse {
+
+    0%,
+    100% {
+        opacity: 0.7;
+    }
+
+    50% {
+        opacity: 1;
+    }
+}
 </style>

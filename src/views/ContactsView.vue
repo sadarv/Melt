@@ -200,6 +200,7 @@ function closeModal() {
 }
 
 onMounted(loadPersonas)
+onActivated(loadPersonas)
 </script>
 
 <style scoped>

@@ -81,61 +81,22 @@ async function getAllPersonas() {
     ...custom.map((p) => p.id),
   ]);
   const syncedNew = synced.filter((p) => !existingIds.has(p.id));
-  return [...builtin, ...custom, ...syncedNew];
-}
-
-// ========== 情绪异步计算（副 API）==========
-async function updateEmotionAsync(personaId) {
-  const config = getSubApiConfig();
-  if (!config.apiKey) return;
-  const msgs = await storage.getMessages(personaId);
-  if (msgs.length === 0) return;
-  const lastCalc = localStorage.getItem(`emotion_calc_time_${personaId}`);
-  if (lastCalc && Date.now() - parseInt(lastCalc) < 30 * 60 * 1000) return;
-
-  const context = msgs
-    .slice(-20)
-    .map((m) => `${m.role === "user" ? "用户" : "AI"}: ${m.content}`)
-    .join("\n");
-
-  const prompt = `根据以下最近对话，判断 AI 角色的情绪状态。
-
-对话记录：
-${context}
-
-返回 JSON（不要其他内容）：
-{
-  "pa": 正面情绪强度 0-1,
-  "na": 负面情绪强度 0-1,
-  "longing": 思念强度 0-1,
-  "longing_phase": "content"|"stirring"|"protest"|"despair"|"detachment"
-}
-
-判断标准：
-- content：对话正常，情绪稳定
-- stirring：用户有段时间没说话，或对话中有离别感
-- protest：用户长时间不回复，或表达了忙碌/离开
-- despair：用户态度冷淡，或对话很少
-- detachment：对话极少或充满负面情绪`;
-
-  try {
-    const res = await fetchAI(config, [{ role: "user", content: prompt }], {
-      max_tokens: 100,
-    });
-    const { ok, data } = await parseAIResponse(res);
-    if (!ok || !data) return;
-    const text = data.choices?.[0]?.message?.content?.trim() || "";
-    const match = text.match(/\{[\s\S]*\}/);
-    if (!match) return;
-    const result = JSON.parse(match[0]);
-    localStorage.setItem(`emotion_${personaId}`, JSON.stringify(result));
-    localStorage.setItem(`emotion_calc_time_${personaId}`, String(Date.now()));
-  } catch {}
+  // 合并后再统一过滤一次，覆盖自定义角色被隐藏的情况
+  const all = [...builtin, ...custom, ...syncedNew];
+  return all.filter((p) => !hidden.includes(p.id));
 }
 
 // ========== AI 主对话（主 API）==========
-async function callAI(personaId, messages, personaContent, userMessage) {
+async function callAI(
+  personaId,
+  messages,
+  personaContent,
+  userMessage,
+  persona = null,
+) {
   const config = storage.getApiConfig();
+  const callUser = persona?.call_user || "你";
+
   if (!config.apiKey) return "请先在设置中配置 API Key";
 
   const now = new Date();
@@ -191,7 +152,7 @@ async function callAI(personaId, messages, personaContent, userMessage) {
       if (replies.length > 0) {
         parts.push("【典型回复风格】");
         replies.forEach((s) => {
-          parts.push(`用户：${s.data.user_message}`);
+          parts.push(`${callUser}：${s.data.user_message}`);
           parts.push(
             `${personaContent.slice(0, 5) || "AI"}：${s.data.assistant_reply}`,
           );
@@ -525,9 +486,57 @@ export async function localApiHandler(url, options = {}) {
     const persona = personas.find((p) => p.id === personaId);
     const personaContent = persona?.content || "";
     const history = await storage.getMessages(personaId);
-    const reply = await callAI(personaId, history, personaContent, userMessage);
+
+    // 调用 AI 获取回复
+    const reply = await callAI(
+      personaId,
+      history,
+      personaContent,
+      userMessage,
+      persona,
+    );
+
+    // 新增：调用记忆处理，将新消息加入历史，然后处理
+    const updatedHistory = [
+      ...history,
+      {
+        role: "user",
+        content: userMessage,
+        timestamp: new Date().toISOString(),
+      },
+      {
+        role: "assistant",
+        content: reply,
+        timestamp: new Date().toISOString(),
+      },
+    ];
+
+    // 新增：触发记忆处理
+    try {
+      const { processLocalMemory } = await import("./localMemory.js");
+      const totalMessages = updatedHistory.length;
+
+      const userName = persona?.call_user || "你";
+      const aiName = persona?.note || persona?.name || "AI";
+
+      await processLocalMemory(
+        personaId,
+        updatedHistory.slice(-20),
+        userMessage,
+        reply,
+        totalMessages,
+        userName,
+        aiName,
+      ).catch((e) => {
+        console.error("[LocalAPI] 记忆处理出错:", e.message);
+      });
+    } catch (e) {
+      console.error("[LocalAPI] 导入 processLocalMemory 失败:", e.message);
+    }
+
     return mockResponse({ reply });
   }
+
   if (msgMatch && method === "DELETE") {
     await storage.saveMessages(msgMatch[1], []);
     return mockResponse({ success: true });
@@ -610,33 +619,72 @@ export async function localApiHandler(url, options = {}) {
     const personas = await getAllPersonas();
     const persona = personas.find((p) => p.id === pid);
     const personaName = persona?.note || persona?.name || "TA";
-    const prompt = `你是${personaName}，请为自己安排今天的日程。根据你的人设和性格，生成3-5条今天的日程安排。
 
-人设：${persona?.content?.slice(0, 300) || ""}
+    const now2 = new Date();
+    const weekdays2 = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+    const todayLabel = `${now2.getMonth() + 1}月${now2.getDate()}日${weekdays2[now2.getDay()]}`;
+    const todayKey = now2.toISOString().slice(0, 10); // 2025-08-06
+
+    // 读取历史生成过的标签（跨天持久记录，最多保留60条）
+    const historyKey = `schedule_history_${pid}`;
+    const historyLabels = JSON.parse(localStorage.getItem(historyKey) || "[]");
+    const recentLabels = historyLabels.slice(0, 20).join("、");
+
+    // 用今天日期 + pid 做固定种子，同一天多次点击结果一致，不同天结果不同
+    const daySeed = (todayKey + pid)
+      .split("")
+      .reduce((a, c) => a + c.charCodeAt(0), 0);
+    const variationSeeds = [
+      "今天心情不错，想做点平时不常做的事",
+      "今天有些疲惫，安排轻松一些",
+      "今天想尝试新东西",
+      "今天想安静待着，不想出门",
+      "今天精力充沛，想动起来",
+      "今天有点懒，慢节奏过",
+      "今天有点小期待，说不清楚是什么",
+      "今天莫名其妙有点想哭，但还好",
+    ];
+    const seed = variationSeeds[daySeed % variationSeeds.length];
+
+    const prompt = `你是${personaName}，今天是${todayLabel}。
+请为自己安排今天的日程，生成3-5条。
+
+你的人设：${persona?.content?.slice(0, 300) || ""}
+
+今天的状态：${seed}
+${recentLabels ? `注意：以下是你最近已经安排过的日程，今天请完全避开这些，生成不一样的内容：${recentLabels}` : ""}
 
 要求：
-- 符合角色性格和生活方式
+- 符合你的性格和生活方式
+- 今天的安排必须有自己的特点，体现今天的状态和心情
+- 可以加入临时起意的小事、季节感、某个具体的细节
 - 包含时间（小时，0-23）
-- 简短描述（10字以内）
+- 描述简短（10字以内），要有画面感，不要泛泛的"休息""散步"
+- 时间分布合理，覆盖早中晚
 
 只返回JSON数组：
 [
-  {"hour": 8, "minute": 0, "label": "起床洗漱"},
-  {"hour": 12, "minute": 30, "label": "午饭"}
+  {"hour": 8, "minute": 0, "label": "赖床听窗外的雨声"},
+  {"hour": 14, "minute": 30, "label": "翻出了很久没读的书"}
 ]`;
+
     try {
       const res = await fetchAI(config, [{ role: "user", content: prompt }], {
         max_tokens: 300,
       });
       const { ok, data } = await parseAIResponse(res);
+
       if (!ok || !data) return mockResponse({ error: "生成失败" });
       const text = data.choices?.[0]?.message?.content?.trim() || "";
       const match = text.match(/\[[\s\S]*\]/);
       if (!match) return mockResponse({ error: "格式错误" });
       const schedules = JSON.parse(match[0]);
+
+      // 保留手动添加的，替换 AI 生成的
       const existing = JSON.parse(
         localStorage.getItem(`schedules_${pid}`) || "[]",
-      ).filter((s) => !s.aiGenerated); // 保留手动添加的，替换 AI 生成的
+      ).filter((s) => !s.aiGenerated);
+
       const newSchedules = schedules.map((s, i) => ({
         id: Date.now() + i,
         label: s.label,
@@ -645,14 +693,32 @@ export async function localApiHandler(url, options = {}) {
         prompt_hint: s.label,
         enabled: true,
         aiGenerated: true,
+        date: todayKey,
       }));
+
+      // 同天已生成过则跳过（避免重复点击追加）
+      const todayGenKey = `schedule_generated_${pid}_${todayKey}`;
+      if (localStorage.getItem(todayGenKey)) {
+        return mockResponse({ success: true, count: 0, skipped: true });
+      }
+      localStorage.setItem(todayGenKey, "1");
+
       localStorage.setItem(
         `schedules_${pid}`,
         JSON.stringify([...existing, ...newSchedules]),
       );
+
+      // 把新标签追加进历史记录，去重后保留最近60条
+      const newLabels = newSchedules.map((s) => s.label);
+      const updatedHistory = [
+        ...new Set([...newLabels, ...historyLabels]),
+      ].slice(0, 60);
+      localStorage.setItem(historyKey, JSON.stringify(updatedHistory));
+
       localStorage.setItem("persona_schedules_updated", Date.now().toString());
       return mockResponse({ success: true, count: newSchedules.length });
     } catch (e) {
+      console.error("[Schedule] 生成失败详情:", e.message, e.stack);
       return mockResponse({ error: e.message });
     }
   }
@@ -829,10 +895,47 @@ export async function localApiHandler(url, options = {}) {
     );
   }
 
+  // ========== 记忆星图 build ==========
+  const memGraphBuildMatch = url.match(
+    /^\/api\/memory-graph\/([^\/]+)\/build$/,
+  );
+  if (memGraphBuildMatch && method === "POST") {
+    const pid = memGraphBuildMatch[1];
+    try {
+      const { manualSediment } = await import("./localMemory.js");
+      await manualSediment(pid).catch(() => {});
+    } catch {}
+    return mockResponse({ success: true });
+  }
+
   // ========== 记忆星图 ==========
   const memGraphMatch = url.match(/^\/api\/memory-graph\/([^\/]+)$/);
   if (memGraphMatch && method === "GET") {
-    const fragments = await storage.getFragments(memGraphMatch[1]);
+    const pid = memGraphMatch[1];
+
+    // 优先用 AI 生成的 graph_nodes
+    try {
+      const { getLocalGraphNodes } = await import("./localMemory.js");
+      const graphNodes = getLocalGraphNodes(pid);
+      if (graphNodes.length > 0) {
+        return mockResponse(
+          graphNodes.map((n) => ({
+            id: n.id,
+            content: n.summary || n.title,
+            keywords: n.keywords || [],
+            importance: n.importance || 3,
+            source_type: "graph_node",
+            linked_ids: [],
+            title: n.title,
+            theme: n.theme,
+            heat: n.heat,
+          })),
+        );
+      }
+    } catch {}
+
+    // fallback：用 fragments
+    const fragments = await storage.getFragments(pid);
     if (fragments.length === 0) return mockResponse([]);
 
     function extractKeywords(text) {
@@ -852,15 +955,40 @@ export async function localApiHandler(url, options = {}) {
         "都",
         "这",
         "那",
+        "也",
+        "很",
+        "但",
+        "所以",
+        "因为",
+        "虽然",
+        "还是",
+        "已经",
+        "一个",
+        "一些",
+        "什么",
+        "没有",
+        "可以",
+        "知道",
       ]);
-      const words = [];
-      for (let len = 4; len >= 2; len--) {
-        for (let i = 0; i <= text.length - len; i++) {
-          const w = text.slice(i, i + len);
-          if (/[\u4e00-\u9fa5]{2,}/.test(w) && !stopWords.has(w)) words.push(w);
+      const sentences = text
+        .split(/[，。！？、…\s]+/)
+        .filter((s) => s.length >= 2);
+      const words = new Set();
+      for (const s of sentences) {
+        let found = false;
+        for (let len = 4; len >= 2; len--) {
+          for (let i = 0; i <= s.length - len; i++) {
+            const w = s.slice(i, i + len);
+            if (/^[\u4e00-\u9fa5]+$/.test(w) && !stopWords.has(w)) {
+              words.add(w);
+              found = true;
+              break;
+            }
+          }
+          if (found) break;
         }
       }
-      return [...new Set(words)].slice(0, 8);
+      return [...words].slice(0, 5);
     }
 
     const nodes = fragments.map((f) => ({
@@ -1125,17 +1253,8 @@ export async function localApiHandler(url, options = {}) {
       const tl = await storage.getTimeline(p.id);
       const filtered = tl.filter((e) => e.id !== id);
       if (filtered.length !== tl.length) {
-        // 直接写回
-        const { openDB: _open } = await import("./storage.js");
-        const _db = await _open();
-        await new Promise((resolve, reject) => {
-          const tx = _db.transaction("timeline", "readwrite");
-          const req = tx
-            .objectStore("timeline")
-            .put({ key: `timeline_${p.id}`, value: filtered });
-          req.onsuccess = () => resolve();
-          req.onerror = (e) => reject(e.target.error);
-        });
+        const { dbSet } = await import("./storage.js");
+        await dbSet("timeline", `timeline_${p.id}`, filtered);
         break;
       }
     }
@@ -1147,7 +1266,6 @@ export async function localApiHandler(url, options = {}) {
   if (emotionMatch && method === "GET") {
     const pid = emotionMatch[1];
     const cached = localStorage.getItem(`emotion_${pid}`);
-    updateEmotionAsync(pid).catch(() => {});
     return mockResponse(
       cached
         ? JSON.parse(cached)
@@ -1196,13 +1314,14 @@ export async function localApiHandler(url, options = {}) {
     const personas = await getAllPersonas();
     const persona = personas.find((p) => p.id === pid);
     const personaName = persona?.note || persona?.name || "TA";
+    const callUser = persona?.call_user || "你";
     const memoryContext = await storage.buildMemoryContext(pid);
     const now = new Date();
     const dateStr = `${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日`;
 
     const recentContext = msgs
       .slice(-20)
-      .map((m) => `${m.role === "user" ? "用户" : personaName}: ${m.content}`)
+      .map((m) => `${m.role === "user" ? callUser : personaName}: ${m.content}`)
       .join("\n");
 
     const prompt = `你是${personaName}，今天是${dateStr}。
@@ -1210,14 +1329,14 @@ export async function localApiHandler(url, options = {}) {
 今天你们的对话：
 ${recentContext}
 
-关于用户你积累的记忆：
+关于${callUser}你积累的记忆：
 ${memoryContext || "（还没有太多记忆）"}
 
 请以${personaName}的视角，生成今天的沉淀手记，包含两个部分：
 
-1. 【今日洞察】：从今天的对话中，你观察到用户的什么特点、情绪变化或行为模式？（50字以内，客观陈述）
+1. 【今日洞察】：从今天的对话中，你观察到${callUser}的什么特点、情绪变化或行为模式？（50字以内，客观陈述）
 
-2. 【关系感受】：今天和用户相处后，你内心有什么感受或想法？（50字以内，第一人称，情感真实）
+2. 【关系感受】：今天和${callUser}相处后，你内心有什么感受或想法？（50字以内，第一人称，情感真实）
 
 只返回 JSON：
 {
@@ -1228,12 +1347,15 @@ ${memoryContext || "（还没有太多记忆）"}
   "summary": "关系感受内容"
 }`;
 
-    const { manualSediment } = await import("@/utils/localMemory.js");
-    const batchResult = await manualSediment(pid).catch(() => ({
-      success: false,
-    }));
-    if (!batchResult.success)
-      console.warn("[LocalAPI] manualSediment 未成功，继续生成 insight");
+    let batchResult = { success: false };
+    try {
+      const { manualSediment } = await import("./localMemory.js");
+      batchResult = await manualSediment(pid).catch(() => ({ success: false }));
+      if (!batchResult.success)
+        console.warn("[LocalAPI] manualSediment 未成功，继续生成 insight");
+    } catch (e) {
+      console.warn("[LocalAPI] manualSediment import 失败:", e.message);
+    }
 
     try {
       const res = await fetchAI(config, [{ role: "user", content: prompt }], {
@@ -1680,12 +1802,13 @@ ${content.slice(0, 4000)}`;
     ]);
     const persona = personas.find((p) => p.id === pid);
     const personaName = persona?.note || persona?.name || "TA";
+    const callUser = persona?.call_user || "你";
     const now = new Date();
     const dateStr = `${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日`;
 
     const recentContext = msgs
       .slice(-10)
-      .map((m) => `${m.role === "user" ? "用户" : personaName}: ${m.content}`)
+      .map((m) => `${m.role === "user" ? callUser : personaName}: ${m.content}`)
       .join("\n");
 
     const prompt = `你是${personaName}，现在是${dateStr}。
@@ -1998,7 +2121,10 @@ ${memoryContext || "（还没有记忆）"}
     }
 
     const chatContext = todayMsgs
-      .map((m) => `${m.role === "user" ? "用户" : personaName}: ${m.content}`)
+      .map(
+        (m) =>
+          `${m.role === "user" ? persona?.call_user || "你" : personaName}: ${m.content}`,
+      )
       .join("\n");
 
     const userDiarySection =

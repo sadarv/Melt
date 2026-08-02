@@ -603,8 +603,12 @@ select:focus {
     --font-scale: 0.92;
   }
 
+  /* 小屏 dock padding，不覆盖 bottom 方向 */
   .dock-bar-v8 {
-    padding: 6px 4px 10px;
+    padding-top: 6px;
+    padding-left: 4px;
+    padding-right: 4px;
+    /* 注意：不设 padding-bottom，由 HomeView 的 bottom 值控制 */
   }
 
   .dock-item-v8 {
@@ -661,13 +665,6 @@ select:focus {
   .dock-bar-v8 {
     bottom: 8px;
     padding: 6px 4px 8px;
-  }
-}
-
-/* 安卓特殊适配（无刘海屏） */
-@supports not (padding: env(safe-area-inset-top)) {
-  .home-screen {
-    padding-top: 24px;
   }
 }
 
@@ -755,4 +752,26 @@ code {
   max-width: 100%;
   overflow-x: auto;
   word-break: break-all;
+}
+
+/* ==========================================================================
+   安全区适配
+   ========================================================================== */
+
+:root {
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* 页面内容底部留出空间防止被 dock 遮住（80px是dock高度估算） */
+.screen-content,
+.page-panel {
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 80px);
+}
+
+/* 聊天输入框避开底部安全区 */
+.chat-input-area,
+.input-area,
+.chat-input-wrapper {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
 }

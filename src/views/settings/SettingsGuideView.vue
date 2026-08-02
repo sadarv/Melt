@@ -149,7 +149,18 @@ const buildVariant = computed(() => {
 
 const changelogs = ref([
     {
-        version: '1.2.0',
+        version: '1.1.0',
+        date: '2026-08-02',
+        items: [
+            '修复内置角色删除逻辑，支持隐藏后彻底不显示',
+            '优化关于记忆显示等名称',
+            '日程生成逻辑优化，日历显示更明显',
+            '记忆星图生成逻辑优化',
+            '（os：这次应该没有问题了，然后下次更新随缘）',
+        ]
+    },
+    {
+        version: '1.0.3',
         date: '2026-07-31',
         items: [
             '修复消息重复显示问题',
@@ -162,7 +173,7 @@ const changelogs = ref([
         ]
     },
     {
-        version: '1.1.1',
+        version: '1.0.2',
         date: '2026-07-25',
         items: [
             '本地模式全面切换至 IndexedDB，支持更大数据量',
@@ -174,7 +185,7 @@ const changelogs = ref([
         ]
     },
     {
-        version: '1.0.2',
+        version: '1.0.1',
         date: '2026-07-13',
         items: [
             '修复安全区问题',
@@ -261,9 +272,9 @@ const pendingFeatures = ref([
     {
         key: 'proactive',
         icon: '<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>',
-        title: '离线推送通知',
-        desc: '关闭页面后仍能收到角色消息通知，需要后端推送支持',
-        badge: '探索中',
+        title: '主动消息与后台通知',
+        desc: 'PWA 无法实现真正的后台推送。添加到主屏幕后需保持应用在后台运行才能触发主动消息，关闭后无效',
+        badge: '受限',
         local: false
     },
     {

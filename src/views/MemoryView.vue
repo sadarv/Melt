@@ -242,7 +242,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onActivated } from 'vue'
 import { api } from '@/utils/api'
 import SoftButton from '@/components/ui/SoftButton.vue'
 import BlurModal from '@/components/ui/BlurModal.vue'
@@ -355,7 +355,9 @@ async function loadNarratives() {
 async function loadPersonas() {
     try {
         const res = await api('/api/personas/all')
-        personas.value = await res.json()
+        const data = await res.json()
+        const hidden = JSON.parse(localStorage.getItem('hidden_personas') || '[]')
+        personas.value = data.filter(p => !hidden.includes(p.id))
         const pinnedList = JSON.parse(localStorage.getItem('pinned_personas') || '[]')
         personas.value.sort((a, b) => {
             if (pinnedList.includes(a.id) && !pinnedList.includes(b.id)) return -1
@@ -444,6 +446,7 @@ async function saveEditMemory() {
 }
 
 onMounted(loadPersonas)
+onActivated(loadPersonas)
 </script>
 
 <style scoped>

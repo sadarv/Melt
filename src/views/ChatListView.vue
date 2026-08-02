@@ -77,7 +77,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onActivated } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '@/utils/api'
 import BlurModal from '@/components/ui/BlurModal.vue'
@@ -225,6 +225,7 @@ async function loadPersonas() {
 }
 
 onMounted(loadPersonas)
+onActivated(loadPersonas)
 </script>
 
 <style scoped>

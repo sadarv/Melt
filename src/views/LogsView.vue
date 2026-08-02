@@ -48,7 +48,7 @@
                 <p class="empty-sub">在关于他页面点击「立即沉淀」可以自动提取</p>
             </div>
 
-            <div v-for="sample in filteredSamples" :key="sample.id" class="sample-card">
+            <div v-for="(sample, idx) in filteredSamples" :key="sample.id + '_' + idx" class="sample-card">
                 <div class="sample-header">
                     <span class="sample-tag" :class="'tag-' + sample.type">{{ typeLabel(sample.type) }}</span>
                     <span class="sample-time" v-if="sample.created_at">
@@ -114,7 +114,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onActivated } from 'vue'
 import { api } from '@/utils/api'
 import SoftButton from '@/components/ui/SoftButton.vue'
 import DreamInput from '@/components/ui/DreamInput.vue'
@@ -227,6 +227,7 @@ async function deleteSample(id) {
 }
 
 onMounted(loadPersonas)
+onActivated(loadPersonas)
 </script>
 
 <style scoped>

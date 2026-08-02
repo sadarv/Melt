@@ -131,7 +131,7 @@ export async function api(path, options = {}) {
   const isTestRequest = path.includes("/api/test/");
 
   if (isStaticLocalMode) {
-    const { localApiHandler } = await import("./localApi");
+    const { localApiHandler } = await import("./localApi.js");
     return localApiHandler(path, options);
   }
 
@@ -145,7 +145,7 @@ export async function api(path, options = {}) {
         body: options.body ? JSON.parse(options.body) : undefined,
       });
     }
-    const { localApiHandler } = await import("./localApi");
+    const { localApiHandler } = await import("./localApi.js");
     return localApiHandler(path, options);
   }
 

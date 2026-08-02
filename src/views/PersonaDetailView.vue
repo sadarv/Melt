@@ -56,7 +56,7 @@
             <div class="settings-group">
                 <div class="settings-group-item">
                     <div class="sgi-label">对你的称呼</div>
-                    <input class="sgi-input" v-model="detail.call_user" placeholder="例：主人、小然" />
+                    <input class="sgi-input" v-model="detail.call_user" placeholder="例：宝宝、亲爱的" />
                 </div>
                 <div class="settings-group-item" style="position:relative;">
                     <div class="sgi-label">性别</div>
@@ -855,16 +855,20 @@ async function deletePersona() {
     try {
         await api(`/api/messages/${personaId}`, { method: 'DELETE' })
         await api(`/api/memories/${personaId}/clear`, { method: 'DELETE' })
-        if (detail.custom) {
+        const isCustom = detail.custom === true || String(personaId).startsWith('custom_')
+        if (isCustom) {
             await api(`/api/personas/custom/${personaId}`, { method: 'DELETE' })
         } else {
             await api(`/api/personas/builtin/${personaId}/hide`, { method: 'POST' })
+            const hidden = JSON.parse(localStorage.getItem('hidden_personas') || '[]')
+            if (!hidden.includes(personaId)) {
+                hidden.push(personaId)
+                localStorage.setItem('hidden_personas', JSON.stringify(hidden))
+            }
         }
-        const hidden = JSON.parse(localStorage.getItem('hidden_personas') || '[]')
-        if (!hidden.includes(personaId)) {
-            hidden.push(personaId)
-            localStorage.setItem('hidden_personas', JSON.stringify(hidden))
-        }
+        sessionStorage.removeItem('personas_loaded')
+        sessionStorage.removeItem('cached_personas')
+        sessionStorage.removeItem('home_data_loaded')
         router.push('/')
     } catch {
         saveMsg.value = '删除失败'
@@ -877,6 +881,9 @@ async function deleteAi() {
         await api(`/api/messages/${personaId}`, { method: 'DELETE' })
         await api(`/api/memories/${personaId}/clear`, { method: 'DELETE' })
         await api(`/api/personas/custom/${personaId}`, { method: 'DELETE' })
+        sessionStorage.removeItem('personas_loaded')
+        sessionStorage.removeItem('cached_personas')
+        sessionStorage.removeItem('home_data_loaded')
         router.push('/')
     } catch {
         saveMsg.value = '删除失败'

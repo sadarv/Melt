@@ -45,7 +45,7 @@
                     </div>
                     <div class="dim-markers">
                         <span v-for="s in stages" :key="s" class="marker" :class="{ active: s === dim.stage }">{{ s
-                        }}</span>
+                            }}</span>
                     </div>
                 </div>
             </div>
@@ -56,7 +56,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onActivated } from 'vue'
 import { api } from '@/utils/api'
 
 const personas = ref([])
@@ -118,6 +118,7 @@ const dataPoints = computed(() => {
 })
 
 onMounted(loadPersonas)
+onActivated(loadPersonas)
 </script>
 
 
